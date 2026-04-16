@@ -1,0 +1,9 @@
+{
+  "name": "DakikTabela Ölçü & Keşif",
+  "description": "Kurumsal tabela üretim, keşif ve iş emri yönetim sistemi. Fotoğraf üzerinden ölçülendirme ve katmanlı tasarım desteği.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "Stores user roles and profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "designer", "surveyor", "production", "installer"] },
+        "companyId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "project": {
+      "title": "Project",
+      "description": "A project for a customer.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "customerId": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "pending_survey", "surveying", "survey_completed", "design_in_progress", "revision", "pending_approval", "in_production", "in_installation", "completed"] },
+        "description": { "type": "string" },
+        "address": { "type": "string" },
+        "assignedTo": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "status"]
+    },
+    "survey": {
+      "title": "Survey",
+      "description": "A survey record within a project.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projectId": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string", "enum": ["facade", "interior", "exterior", "vehicle", "custom"] },
+        "mediaUrl": { "type": "string" },
+        "canvasData": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "title", "type"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "user",
+      "description": "User profiles and roles."
+    },
+    "/projects/{projectId}": {
+      "schema": "project",
+      "description": "Project details."
+    },
+    "/projects/{projectId}/surveys/{surveyId}": {
+      "schema": "survey",
+      "description": "Survey records for a project."
+    }
+  }
+}
