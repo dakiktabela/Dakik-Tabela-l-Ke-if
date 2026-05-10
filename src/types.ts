@@ -80,6 +80,14 @@ export interface CanvasObject {
   scaleX?: number;
   scaleY?: number;
   isLocked?: boolean;
+  isMeasurementLocked?: boolean;
+  opacity?: number;
+  blendMode?: string;
+  dash?: number[];
+  measurementLabel?: string;
+  arrowStyle?: 'both' | 'start' | 'end' | 'none';
+  labelOffset?: { x: number; y: number };
+  isGuide?: boolean;
   fontSize?: number;
   fontFamily?: string;
   align?: 'left' | 'center' | 'right';

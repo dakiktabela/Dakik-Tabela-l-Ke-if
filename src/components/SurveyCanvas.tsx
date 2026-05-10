@@ -39,12 +39,23 @@ import {
   ArrowDown,
   Magnet,
   Hexagon,
-  Star as StarIcon
+  Star as StarIcon,
+  GripVertical,
+  Monitor,
+  Layout as LayoutIcon,
+  Palette,
+  Plus,
+  MoveRight,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  Pentagon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 import useImage from 'use-image';
 import { PDFDocument, rgb, degrees } from 'pdf-lib';
+import { Reorder, AnimatePresence, motion } from 'framer-motion';
 
 export function SurveyCanvas() {
   const { projectId, surveyId } = useParams();
@@ -52,9 +63,18 @@ export function SurveyCanvas() {
   const [survey, setSurvey] = useState<Survey | null>(null);
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [tool, setTool] = useState<'select' | 'line' | 'rect' | 'ellipse' | 'text' | 'arrow' | 'sticky' | 'pen' | 'measure' | 'polygon' | 'star' | 'angle' | 'icon'>('select');
-  const [history, setHistory] = useState<CanvasObject[][]>([]);
+  const [tool, setTool] = useState<'select' | 'line' | 'rect' | 'ellipse' | 'text' | 'arrow' | 'sticky' | 'pen' | 'measure' | 'polygon' | 'star' | 'angle' | 'icon' | 'guide'>('select');
+  
+  // Action-based History
+  interface HistoryAction {
+    type: 'ADD' | 'UPDATE' | 'DELETE' | 'REORDER' | 'LAYER_CHANGE';
+    desc: string;
+    before: CanvasObject[];
+    after: CanvasObject[];
+  }
+  const [history, setHistory] = useState<HistoryAction[]>([]);
   const [historyStep, setHistoryStep] = useState(-1);
+  
   const [bgImage] = useImage(survey?.mediaUrl || '');
   const [stageSize, setStageSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [scale, setScale] = useState(1);
@@ -66,8 +86,29 @@ export function SurveyCanvas() {
   const [snapToGrid, setSnapToGrid] = useState(() => localStorage.getItem('snapToGrid') !== 'false');
   const [gridSize, setGridSize] = useState(() => parseInt(localStorage.getItem('gridSize') || '50'));
   const [defaultUnit, setDefaultUnit] = useState<'cm' | 'mm' | 'm'>('cm');
-  const [layers, setLayers] = useState<{id: string, name: string, visible: boolean}[]>([{id: 'default', name: 'Varsayılan', visible: true}]);
+  const [layers, setLayers] = useState<{
+    id: string, 
+    name: string, 
+    visible: boolean, 
+    locked: boolean,
+    color: string, 
+    opacity: number, 
+    blendMode: string
+  }[]>([
+    { 
+      id: 'default', 
+      name: 'Varsayılan', 
+      visible: true, 
+      locked: false,
+      color: '#6366F1', 
+      opacity: 1, 
+      blendMode: 'normal' 
+    }
+  ]);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(() => localStorage.getItem('autoSaveEnabled') !== 'false');
+  const [showAutoSaveToast, setShowAutoSaveToast] = useState(false);
   const [clipboard, setClipboard] = useState<CanvasObject[]>([]);
+  const [presentationMode, setPresentationMode] = useState(false);
   
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
@@ -76,7 +117,8 @@ export function SurveyCanvas() {
     localStorage.setItem('showGrid', showGrid.toString());
     localStorage.setItem('snapToGrid', snapToGrid.toString());
     localStorage.setItem('gridSize', gridSize.toString());
-  }, [showGrid, snapToGrid, gridSize]);
+    localStorage.setItem('autoSaveEnabled', autoSaveEnabled.toString());
+  }, [showGrid, snapToGrid, gridSize, autoSaveEnabled]);
 
   useEffect(() => {
     if (!projectId || !surveyId) return;
@@ -195,14 +237,13 @@ export function SurveyCanvas() {
   }, [selectedIds]);
 
   useEffect(() => {
-    if (objects.length > 0 && historyStep === history.length - 1) {
-      setHistory([...history, objects]);
-      setHistoryStep(history.length);
+    if (objects.length > 0 && historyStep === -1) {
+      pushHistory({ type: 'ADD', desc: 'Başlangıç', after: objects });
     }
-  }, [objects]);
+  }, []);
 
   useEffect(() => {
-    if (!projectId || !surveyId) return;
+    if (!projectId || !surveyId || !autoSaveEnabled) return;
 
     const saveChanges = async () => {
       setIsSaving(true);
@@ -210,6 +251,8 @@ export function SurveyCanvas() {
         await updateDoc(doc(db, 'projects', projectId, 'surveys', surveyId), {
           canvasData: JSON.stringify(objects)
         });
+        setShowAutoSaveToast(true);
+        setTimeout(() => setShowAutoSaveToast(false), 2000);
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, `projects/${projectId}/surveys/${surveyId}`);
       } finally {
@@ -225,19 +268,31 @@ export function SurveyCanvas() {
       clearTimeout(saveTimeout);
       window.removeEventListener('beforeunload', saveChanges);
     };
-  }, [objects, projectId, surveyId]);
+  }, [objects, projectId, surveyId, autoSaveEnabled]);
+
+  const pushHistory = (action: Omit<HistoryAction, 'before'>, currentObjects: CanvasObject[] = objects) => {
+    const newHistory = history.slice(0, historyStep + 1);
+    const fullAction: HistoryAction = {
+      ...action,
+      before: [...currentObjects]
+    };
+    newHistory.push(fullAction);
+    setHistory(newHistory);
+    setHistoryStep(newHistory.length - 1);
+  };
 
   const undo = () => {
-    if (historyStep > 0) {
+    if (historyStep >= 0) {
+      setObjects(history[historyStep].before);
       setHistoryStep(historyStep - 1);
-      setObjects(history[historyStep - 1]);
     }
   };
 
   const redo = () => {
     if (historyStep < history.length - 1) {
-      setHistoryStep(historyStep + 1);
-      setObjects(history[historyStep + 1]);
+      const nextStep = historyStep + 1;
+      setObjects(history[nextStep].after);
+      setHistoryStep(nextStep);
     }
   };
 
@@ -313,8 +368,13 @@ export function SurveyCanvas() {
         unit: defaultUnit,
       };
 
-      if (tool === 'line' || tool === 'arrow' || tool === 'pen' || tool === 'measure' || tool === 'polygon' || tool === 'star' || tool === 'angle') {
+      if (tool === 'line' || tool === 'arrow' || tool === 'pen' || tool === 'measure' || tool === 'polygon' || tool === 'star' || tool === 'angle' || tool === 'guide') {
         newObj.points = [0, 0, 0, 0];
+        if (tool === 'guide') {
+          newObj.isGuide = true;
+          newObj.dash = [5, 5];
+          newObj.stroke = '#FFD700';
+        }
       } else if (tool === 'rect' || tool === 'ellipse' || tool === 'sticky') {
         newObj.width = 0;
         newObj.height = 0;
@@ -347,11 +407,11 @@ export function SurveyCanvas() {
       if (obj.id === selectedIds[0]) {
         if (obj.isLocked) return obj;
         
-        if (obj.type === 'line' || obj.type === 'arrow' || obj.type === 'measure' || obj.type === 'polygon' || obj.type === 'star' || obj.type === 'angle') {
+        if (obj.type === 'line' || obj.type === 'arrow' || obj.type === 'measure' || obj.type === 'polygon' || obj.type === 'star' || obj.type === 'angle' || obj.type === 'guide') {
           let dx = finalX - obj.x;
           let dy = finalY - obj.y;
 
-          // Snap to 45/90 degrees if shift is held
+          // Robust 45-degree snap when Shift is held
           if (isShift) {
             const angle = Math.atan2(dy, dx);
             const snappedAngle = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
@@ -362,12 +422,12 @@ export function SurveyCanvas() {
 
           const dist = Math.sqrt(dx * dx + dy * dy);
           const pixelsPerUnit = survey?.pixelsPerUnit || 1;
-          const displayVal = survey?.pixelsPerUnit ? (dist / pixelsPerUnit).toFixed(1) : Math.round(dist).toString();
+          const displayVal = survey?.pixelsPerUnit ? (dist / pixelsPerUnit).toFixed(2) : Math.round(dist).toString();
           
           return { 
             ...obj, 
             points: [0, 0, dx, dy],
-            realMeasurement: obj.type === 'measure' ? displayVal : obj.realMeasurement
+            realMeasurement: (obj.type === 'measure' || obj.type === 'guide') ? displayVal : obj.realMeasurement
           };
         } else if (obj.type === 'pen') {
           return { ...obj, points: [...(obj.points || []), finalX - obj.x, finalY - obj.y] };
@@ -452,26 +512,51 @@ export function SurveyCanvas() {
     
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     selectedObjects.forEach(o => {
-      minX = Math.min(minX, o.x);
-      maxX = Math.max(maxX, o.x + (o.width || 0));
-      minY = Math.min(minY, o.y);
-      maxY = Math.max(maxY, o.y + (o.height || 0));
+      const x = o.x;
+      const y = o.y;
+      const w = o.width || 0;
+      const h = o.height || 0;
+      
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x + w);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y + h);
     });
 
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
 
-    setObjects(objects.map(o => {
+    const newObjects = objects.map(o => {
       if (!selectedIds.includes(o.id)) return o;
       let { x, y } = o;
+      const w = o.width || 0;
+      const h = o.height || 0;
+
       if (alignment === 'left') x = minX;
-      else if (alignment === 'right') x = maxX - (o.width || 0);
-      else if (alignment === 'center') x = centerX - (o.width || 0) / 2;
+      else if (alignment === 'right') x = maxX - w;
+      else if (alignment === 'center') x = centerX - w / 2;
       else if (alignment === 'top') y = minY;
-      else if (alignment === 'bottom') y = maxY - (o.height || 0);
-      else if (alignment === 'middle') y = centerY - (o.height || 0) / 2;
+      else if (alignment === 'bottom') y = maxY - h;
+      else if (alignment === 'middle') y = centerY - h / 2;
       return { ...o, x, y };
-    }));
+    });
+
+    pushHistory({ type: 'UPDATE', desc: `Hizalama: ${alignment}`, after: newObjects });
+    setObjects(newObjects);
+  };
+
+  const mergeLayerDown = (layerId: string) => {
+    const index = layers.findIndex(l => l.id === layerId);
+    if (index <= 0) return;
+    const targetLayer = layers[index - 1];
+    setObjects(objects.map(o => o.layer === layerId ? { ...o, layer: targetLayer.id } : o));
+    setLayers(layers.filter(l => l.id !== layerId));
+  };
+
+  const groupSelectedLayers = () => {
+    // Basic implementation: merging selected layers into a new one
+    // In a multi-user app, this might be more complex
+    const selectedLayers = layers.filter(l => l.id === '???'); // Need a way to select layers
   };
 
   const deleteLayer = (layerId: string) => {
@@ -518,6 +603,28 @@ export function SurveyCanvas() {
       return obj;
     });
     setObjects(updated);
+  };
+
+  const getFill = (obj: CanvasObject) => {
+    if (obj.fillPriority === 'linear-gradient' && obj.fillLinearGradientColorStops) {
+      return {
+        fillLinearGradientStartPoint: obj.fillLinearGradientStartPoint || { x: 0, y: 0 },
+        fillLinearGradientEndPoint: obj.fillLinearGradientEndPoint || { x: 100, y: 100 },
+        fillLinearGradientColorStops: obj.fillLinearGradientColorStops,
+        fillPriority: 'linear-gradient'
+      };
+    }
+    if (obj.fillPriority === 'radial-gradient' && obj.fillRadialGradientColorStops) {
+      return {
+        fillRadialGradientStartPoint: obj.fillRadialGradientStartPoint || { x: 0, y: 0 },
+        fillRadialGradientEndPoint: obj.fillRadialGradientEndPoint || { x: 100, y: 100 },
+        fillRadialGradientStartRadius: obj.fillRadialGradientStartRadius || 0,
+        fillRadialGradientEndRadius: obj.fillRadialGradientEndRadius || 100,
+        fillRadialGradientColorStops: obj.fillRadialGradientColorStops,
+        fillPriority: 'radial-gradient'
+      };
+    }
+    return { fill: obj.fill };
   };
 
   const handleSetReference = async () => {
@@ -585,35 +692,42 @@ export function SurveyCanvas() {
     // Add objects
     const objectsToExport = selectedIds.length > 0 ? objects.filter(o => selectedIds.includes(o.id)) : objects;
     objectsToExport.forEach(obj => {
+      const layer = layers.find(l => l.id === (obj.layer || 'default'));
+      if (layer?.visible === false) return;
+
       const x = obj.x * scale + stagePos.x;
       const y = obj.y * scale + stagePos.y;
       const rotation = obj.rotation || 0;
       const scaleX = obj.scaleX || 1;
       const scaleY = obj.scaleY || 1;
-      const stroke = obj.stroke || '#6366F1';
+      const stroke = obj.stroke || layer?.color || '#6366F1';
       const strokeWidth = (obj.strokeWidth || 2);
       const fill = obj.fill || 'none';
+      const opacity = (layer?.opacity ?? 1) * (obj.opacity ?? 1);
+      const blendMode = layer?.blendMode || 'normal';
 
+      let style = `opacity: ${opacity}; mix-blend-mode: ${blendMode === 'normal' ? 'normal' : blendMode};`;
       let transform = `translate(${x}, ${y}) rotate(${rotation}) scale(${scaleX}, ${scaleY})`;
 
       if (obj.type === 'rect' || obj.type === 'sticky') {
         const w = (obj.width || 0) * scale;
         const h = (obj.height || 0) * scale;
-        svg += `<rect width="${w}" height="${h}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" rx="${obj.type === 'sticky' ? 4 : 0}" transform="${transform}" />`;
+        svg += `<rect width="${w}" height="${h}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" rx="${obj.type === 'sticky' ? 4 : 0}" transform="${transform}" style="${style}" />`;
         if (obj.type === 'sticky' && obj.text) {
           svg += `<text x="${w/2}" y="${h/2}" fill="#000000" font-size="${14 * scale}" font-family="sans-serif" text-anchor="middle" dominant-baseline="middle" font-weight="bold" transform="${transform}">${obj.text}</text>`;
         }
       } else if (obj.type === 'ellipse') {
         const rx = Math.abs((obj.width || 0) / 2) * scale;
         const ry = Math.abs((obj.height || 0) / 2) * scale;
-        svg += `<ellipse cx="0" cy="0" rx="${rx}" ry="${ry}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" transform="${transform}" />`;
-      } else if (obj.type === 'line' || obj.type === 'pen' || obj.type === 'arrow') {
+        svg += `<ellipse cx="0" cy="0" rx="${rx}" ry="${ry}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" transform="${transform}" style="${style}" />`;
+      } else if (obj.type === 'line' || obj.type === 'pen' || obj.type === 'arrow' || obj.type === 'guide') {
         const points = obj.points || [];
         let d = `M ${points[0] * scale} ${points[1] * scale}`;
         for (let i = 2; i < points.length; i += 2) {
           d += ` L ${points[i] * scale} ${points[i+1] * scale}`;
         }
-        svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" transform="${transform}" />`;
+        const dashAttr = obj.isGuide || obj.dash ? `stroke-dasharray="${(obj.dash || [5,5]).map(v => v*scale).join(',')}"` : '';
+        svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" transform="${transform}" style="${style}" ${dashAttr} />`;
         
         if (obj.type === 'arrow') {
           // Better arrow head for SVG
@@ -932,87 +1046,129 @@ export function SurveyCanvas() {
 
   return (
     <div className="fixed inset-0 bg-[#050505] overflow-hidden font-sans relative">
-      {/* Background Glows */}
+      {/* Background Animated Blobs */}
+      <div className="absolute top-0 left-0 w-full h-full pointer-events-none overflow-hidden">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[#6366F1]/10 rounded-full blur-[100px] animate-blob" />
+        <div className="absolute top-1/2 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-[100px] animate-blob animation-delay-2000" />
+        <div className="absolute bottom-1/4 left-1/3 w-96 h-96 bg-cyan-500/10 rounded-full blur-[100px] animate-blob animation-delay-4000" />
+      </div>
+
+      {/* Background Glows (Deprecated or complementary) */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
         <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-[#6366F1]/5 rounded-full blur-[150px]" />
         <div className="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-[#6366F1]/3 rounded-full blur-[150px]" />
       </div>
 
-      {/* Floating Header */}
-      <header className="fixed top-6 left-1/2 -translate-x-1/2 h-14 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl flex items-center justify-between px-6 z-50 shadow-2xl min-w-[500px]">
-        <div className="flex items-center gap-4">
-          <Link to={`/projects/${projectId}`} className="p-2 hover:bg-white/5 rounded-xl transition-colors">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <div className="flex flex-col">
-            <h1 className="text-sm font-bold tracking-tight leading-none">{survey?.title}</h1>
-            <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest mt-1">
-              {survey?.type}
-            </span>
-          </div>
-        </div>
+      {/* Auto-save Toast */}
+      <AnimatePresence>
+        {showAutoSaveToast && (
+          <motion.div
+            initial={{ y: 50, opacity: 0, x: -50 }}
+            animate={{ y: 0, opacity: 1, x: -50 }}
+            exit={{ y: 50, opacity: 0, x: -50 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-2xl border border-white/20 rounded-full px-6 py-2 z-[100] flex items-center gap-3 shadow-2xl"
+          >
+            <div className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+            <span className="text-[10px] font-black text-white/80 uppercase tracking-[0.2em]">Değişiklikler Kaydedildi</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl mr-2 border border-white/5">
-            <button onClick={undo} disabled={historyStep <= 0} className="p-2 hover:bg-white/10 rounded-lg disabled:opacity-20"><Undo className="w-4 h-4" /></button>
-            <button onClick={redo} disabled={historyStep >= history.length - 1} className="p-2 hover:bg-white/10 rounded-lg disabled:opacity-20"><Redo className="w-4 h-4" /></button>
-          </div>
-          <select 
-            value={defaultUnit} 
-            onChange={(e) => setDefaultUnit(e.target.value as 'cm' | 'mm' | 'm')}
-            className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#6366F1] text-white"
+      {/* Floating Header */}
+      <AnimatePresence>
+        {!presentationMode && (
+          <motion.header 
+            initial={{ y: -100, x: '-50%', opacity: 0 }}
+            animate={{ y: 0, x: '-50%', opacity: 1 }}
+            exit={{ y: -100, x: '-50%', opacity: 0 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 h-14 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl flex items-center justify-between px-6 z-50 shadow-2xl min-w-[600px]"
           >
-            <option value="cm">cm</option>
-            <option value="mm">mm</option>
-            <option value="m">m</option>
-          </select>
-          <div className="flex items-center gap-2 bg-white/5 p-2 rounded-xl border border-white/5">
-            <button onClick={() => setShowGrid(!showGrid)} className={cn("p-2 rounded-lg", showGrid ? "bg-white/20" : "hover:bg-white/10")} title="Izgarayı Göster/Gizle"><Maximize2 className="w-4 h-4" /></button>
-            <button onClick={() => setSnapToGrid(!snapToGrid)} className={cn("p-2 rounded-lg", snapToGrid ? "bg-white/20" : "hover:bg-white/10")} title="Izgaraya Yapıştır"><Magnet className="w-4 h-4" /></button>
-            <button onClick={zoomToFit} className="p-2 hover:bg-white/10 rounded-lg" title="Sığdır"><Move className="w-4 h-4" /></button>
-            <button onClick={clearCanvas} className="p-2 hover:bg-red-500/20 text-red-500 rounded-lg" title="Temizle"><Trash2 className="w-4 h-4" /></button>
-            <div className="text-[10px] font-mono text-white/40 px-2 min-w-[40px] text-center">
-              {Math.round(scale * 100)}%
+            <div className="flex items-center gap-4">
+              <Link to={`/projects/${projectId}`} className="p-2 hover:bg-white/5 rounded-xl transition-colors">
+                <ArrowLeft className="w-5 h-5" />
+              </Link>
+              <div className="flex flex-col">
+                <h1 className="text-sm font-bold tracking-tight leading-none italic uppercase">{survey?.title}</h1>
+                <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest mt-1">
+                  {survey?.type}
+                </span>
+              </div>
             </div>
-            <input 
-              type="number" 
-              value={gridSize} 
-              onChange={(e) => setGridSize(parseInt(e.target.value) || 50)} 
-              className="w-12 bg-transparent border-none focus:outline-none text-xs text-white"
-              title="Izgara Boyutu"
-            />
-          </div>
-          <button 
-            onClick={handleSave}
-            disabled={isSaving}
-            className="flex items-center gap-2 bg-[#6366F1] text-black text-xs font-bold px-4 py-2 rounded-xl hover:scale-105 transition-transform disabled:opacity-50 shadow-[0_5px_15px_rgba(99,102,241,0.3)]"
-          >
-            {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-            Kaydet
-          </button>
-          <button 
-            onClick={exportImage}
-            className="p-2 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-colors border border-white/5"
-            title="PNG Aktar"
-          >
-            <Camera className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={exportSVG}
-            className="p-2 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-colors border border-white/5"
-            title="SVG Aktar"
-          >
-            <FileCode className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={exportPDF}
-            className="p-2 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-colors border border-white/5"
-            title="PDF Aktar"
-          >
-            <Download className="w-4 h-4" />
-          </button>
-        </div>
-      </header>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl mr-2 border border-white/5">
+                <button onClick={undo} disabled={historyStep <= 0} className="p-2 hover:bg-white/10 rounded-lg disabled:opacity-20"><Undo className="w-4 h-4" /></button>
+                <button onClick={redo} disabled={historyStep >= history.length - 1} className="p-2 hover:bg-white/10 rounded-lg disabled:opacity-20"><Redo className="w-4 h-4" /></button>
+              </div>
+              <button 
+                onClick={() => setPresentationMode(true)}
+                className="p-2 hover:bg-white/5 rounded-xl text-white/60"
+                title="Sunum Modu (H)"
+              >
+                <Monitor className="w-4 h-4" />
+              </button>
+              <select 
+                value={defaultUnit} 
+                onChange={(e) => setDefaultUnit(e.target.value as 'cm' | 'mm' | 'm')}
+                className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#6366F1] text-white"
+              >
+                <option value="cm">cm</option>
+                <option value="mm">mm</option>
+                <option value="m">m</option>
+              </select>
+              <div className="flex items-center gap-2 bg-white/5 p-2 rounded-xl border border-white/5">
+                <button onClick={() => setShowGrid(!showGrid)} className={cn("p-2 rounded-lg", showGrid ? "bg-white/20" : "hover:bg-white/10")} title="Izgarayı Göster/Gizle"><Maximize2 className="w-4 h-4" /></button>
+                <button onClick={() => setSnapToGrid(!snapToGrid)} className={cn("p-2 rounded-lg", snapToGrid ? "bg-white/20" : "hover:bg-white/10")} title="Izgaraya Yapıştır"><Magnet className="w-4 h-4" /></button>
+                <button onClick={zoomToFit} className="p-2 hover:bg-white/10 rounded-lg" title="Sığdır"><Move className="w-4 h-4" /></button>
+                <button onClick={clearCanvas} className="p-2 hover:bg-red-500/20 text-red-500 rounded-lg" title="Temizle"><Trash2 className="w-4 h-4" /></button>
+              </div>
+              <button 
+                onClick={handleSave}
+                disabled={isSaving}
+                className="flex items-center gap-2 bg-[#6366F1] text-black text-xs font-bold px-4 py-2 rounded-xl hover:scale-105 transition-transform disabled:opacity-50 shadow-[0_5px_15px_rgba(99,102,241,0.3)]"
+              >
+                {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                Kaydet
+              </button>
+              <div className="w-px h-8 bg-white/10 mx-1" />
+              <button 
+                onClick={() => {
+                  const palettes = [
+                    { name: 'Modern Indigo', colors: ['#6366F1', '#4F46E5', '#3B82F6', '#2563EB'], fonts: ['Inter', 'Inter'] },
+                    { name: 'Emerald Forest', colors: ['#10B981', '#059669', '#34D399', '#047857'], fonts: ['Inter', 'Space Grotesk'] },
+                    { name: 'Purple Night', colors: ['#8B5CF6', '#7C3AED', '#A78BFA', '#6D28D9'], fonts: ['Inter', 'Outfit'] },
+                    { name: 'Warm Amber', colors: ['#F59E0B', '#D97706', '#FBBF24', '#B45309'], fonts: ['Inter', 'DM Sans'] }
+                  ];
+                  const p = palettes[Math.floor(Math.random() * palettes.length)];
+                  alert(`AI ÖNERİSİ: ${p.name}\nRenkler: ${p.colors.join(', ')}\nFontlar: ${p.fonts.join(', ')}`);
+                  // Apply logic here if desired
+                }}
+                className="p-2 bg-gradient-to-br from-fuchsia-500/20 to-cyan-500/20 hover:from-fuchsia-500/40 hover:to-cyan-500/40 text-cyan-200 rounded-xl transition-all border border-cyan-500/20 group"
+                title="AI Stil Sihirbazı"
+              >
+                <Palette className="w-4 h-4 group-hover:rotate-12 transition-transform" />
+              </button>
+              <button 
+                onClick={exportPDF}
+                className="p-2 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-colors border border-white/5"
+                title="PDF Aktar"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.header>
+        )}
+      </AnimatePresence>
+
+      {/* Presentation Mode Exit Button */}
+      {presentationMode && (
+        <button 
+          onClick={() => setPresentationMode(false)}
+          className="fixed top-6 right-6 p-4 bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl z-[100] text-white hover:bg-white/20 transition-all group shadow-2xl"
+        >
+          <X className="w-6 h-6 group-hover:rotate-90 transition-transform" />
+        </button>
+      )}
 
       {/* Calibration Info */}
       {survey?.pixelsPerUnit && (
@@ -1025,169 +1181,307 @@ export function SurveyCanvas() {
       )}
 
       {/* Floating Tool Palette */}
-      <aside className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl flex items-center p-2 gap-1 z-50 shadow-2xl">
-        {[
-          { id: 'select', icon: MousePointer2, label: 'Seç' },
-          { id: 'pen', icon: Pen, label: 'Kalem' },
-          { id: 'line', icon: Minus, label: 'Çizgi' },
-          { id: 'arrow', icon: Move, label: 'Ok' },
-          { id: 'measure', icon: Ruler, label: 'Ölçü' },
-          { id: 'rect', icon: Square, label: 'Kutu' },
-          { id: 'ellipse', icon: CircleIcon, label: 'Daire' },
-          { id: 'sticky', icon: StickyNote, label: 'Not' },
-          { id: 'text', icon: Type, label: 'Yazı' },
-          { id: 'polygon', icon: Hexagon, label: 'Çokgen' },
-          { id: 'star', icon: StarIcon, label: 'Yıldız' },
-        ].map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTool(t.id as any)}
-            className={cn(
-              "w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-all",
-              tool === t.id ? "bg-[#6366F1] text-black shadow-[0_5px_15px_rgba(99,102,241,0.3)]" : "text-white/40 hover:bg-white/5 hover:text-white"
-            )}
-            title={t.label}
+      <AnimatePresence>
+        {!presentationMode && (
+          <motion.aside 
+            initial={{ y: 100, x: '-50%', opacity: 0 }}
+            animate={{ y: 0, x: '-50%', opacity: 1 }}
+            exit={{ y: 100, x: '-50%', opacity: 0 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl flex items-center p-2 gap-1 z-50 shadow-2xl"
           >
-            <t.icon className="w-5 h-5" />
-          </button>
-        ))}
-        <div className="w-px h-8 bg-white/10 mx-1" />
-        <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/5">
-          <button 
-            onClick={handleGroup}
-            disabled={selectedIds.length < 2}
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
-            title="Grupla"
-          >
-            <Combine className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={handleUngroup}
-            disabled={selectedIds.length === 0}
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
-            title="Grubu Çöz"
-          >
-            <Split className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="w-px h-8 bg-white/10 mx-1" />
-        <button 
-          onClick={handleDelete}
-          disabled={selectedIds.length === 0}
-          className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-red-500 hover:bg-red-500/10 disabled:opacity-20 transition-all"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
-        <label className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 cursor-pointer transition-all">
-          <Camera className="w-5 h-5" />
-          <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
-        </label>
-      </aside>
-
-      {/* Floating Layers Panel */}
-      <aside className="fixed top-24 left-8 w-64 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 z-50 shadow-2xl">
-        <h2 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-6">Katmanlar</h2>
-        <div className="space-y-2">
-          {layers.map((layer, index) => (
-            <div key={layer.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/5">
-              <div className="flex items-center gap-2">
-                <button onClick={() => {
-                  if (index > 0) {
-                    const newLayers = [...layers];
-                    [newLayers[index], newLayers[index - 1]] = [newLayers[index - 1], newLayers[index]];
-                    setLayers(newLayers);
-                  }
-                }} className="text-white/20 hover:text-white">▲</button>
-                <button onClick={() => {
-                  if (index < layers.length - 1) {
-                    const newLayers = [...layers];
-                    [newLayers[index], newLayers[index + 1]] = [newLayers[index + 1], newLayers[index]];
-                    setLayers(newLayers);
-                  }
-                }} className="text-white/20 hover:text-white">▼</button>
-                <input 
-                  value={layer.name}
-                  onChange={(e) => setLayers(layers.map(l => l.id === layer.id ? { ...l, name: e.target.value } : l))}
-                  className="bg-transparent text-xs text-white/60 focus:outline-none focus:text-white"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l))}
-                  className="text-white/40 hover:text-white"
-                >
-                  {layer.visible ? 'Görünür' : 'Gizli'}
-                </button>
-                {layer.id !== 'default' && (
-                  <button onClick={() => deleteLayer(layer.id)} className="text-white/40 hover:text-red-500">
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
+            {[
+              { id: 'select', icon: MousePointer2, label: 'SEÇ', color: '#FFFFFF' },
+              { id: 'pen', icon: Pen, label: 'ÇİZ', color: '#3B82F6' },
+              { id: 'line', icon: Minus, label: 'HAT', color: '#10B981' },
+              { id: 'guide', icon: GripVertical, label: 'KILAVUZ', color: '#FFD700' },
+              { id: 'arrow', icon: MoveRight, label: 'OK', color: '#F59E0B' },
+              { id: 'measure', icon: Ruler, label: 'KUMPAS', color: '#EC4899' },
+              { id: 'rect', icon: Square, label: 'KUTU', color: '#6366F1' },
+              { id: 'ellipse', icon: CircleIcon, label: 'DAİRE', color: '#8B5CF6' },
+              { id: 'polygon', icon: Hexagon, label: 'ÇOKGEN', color: '#F43F5E' },
+              { id: 'star', icon: StarIcon, label: 'YILDIZ', color: '#EAB308' },
+              { id: 'text', icon: Type, label: 'METİN', color: '#06B6D4' },
+              { id: 'sticky', icon: StickyNote, label: 'NOT', color: '#D946EF' },
+            ].map((t) => (
+    <button
+      key={t.id}
+      onClick={() => setTool(t.id as any)}
+      className={cn(
+        "group relative w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300",
+        tool === t.id 
+          ? "bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.2)] scale-110 z-10" 
+          : "text-white/40 hover:bg-white/5 hover:text-white"
+      )}
+      title={t.label}
+    >
+      <t.icon className={cn("w-5 h-5 transition-transform group-hover:scale-110", tool === t.id ? "text-black" : "")} style={{ color: tool === t.id ? undefined : t.color }} />
+      <span className="text-[7px] font-black uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity absolute bottom-1.5">{t.label}</span>
+    </button>
+  ))}
+            <div className="w-px h-8 bg-white/10 mx-1" />
+            <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/5">
+              <button 
+                onClick={handleGroup}
+                disabled={selectedIds.length < 2}
+                className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
+                title="Grupla"
+              >
+                <Combine className="w-4 h-4" />
+              </button>
+              <button 
+                onClick={handleUngroup}
+                disabled={selectedIds.length === 0}
+                className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
+                title="Grubu Çöz"
+              >
+                <Split className="w-4 h-4" />
+              </button>
             </div>
-          ))}
-          <button 
-            onClick={() => setLayers([...layers, { id: `layer-${Date.now()}`, name: 'Yeni Katman', visible: true }])}
-            className="w-full text-xs text-[#6366F1] hover:text-white mt-4"
-          >
-            + Katman Ekle
-          </button>
-        </div>
-      </aside>
+            <div className="w-px h-8 bg-white/10 mx-1" />
+            <button 
+              onClick={handleDelete}
+              disabled={selectedIds.length === 0}
+              className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-red-500 hover:bg-red-500/10 disabled:opacity-20 transition-all"
+              title="Seçili Nesneleri Sil"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+            <label className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 cursor-pointer transition-all" title="Arkaplan Görseli Yükle">
+              <Camera className="w-5 h-5" />
+              <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+            </label>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
-      {/* Floating Properties Panel */}
-      {selectedIds.length > 0 && (
-        <aside className="fixed top-24 right-8 w-64 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 z-50 shadow-2xl">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-[10px] font-bold text-white/40 uppercase tracking-widest">
-              {selectedIds.length > 1 ? `${selectedIds.length} Nesne Seçili` : 'Özellikler'}
+      {/* Reorderable Layers Panel */}
+      <AnimatePresence>
+        {!presentationMode && (
+          <motion.aside 
+            initial={{ x: -300, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -300, opacity: 0 }}
+            className="fixed top-24 left-8 w-64 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl p-6 z-50 shadow-2xl flex flex-col max-h-[70vh]"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Katmanlar</h2>
+              <button 
+                onClick={() => setLayers([...layers, { 
+                  id: `layer-${Date.now()}`, 
+                  name: 'Yeni Katman', 
+                  visible: true,
+                  locked: false,
+                  color: '#' + Math.floor(Math.random()*16777215).toString(16),
+                  opacity: 1,
+                  blendMode: 'normal'
+                }])}
+                className="p-2 hover:bg-white/5 rounded-lg text-[#6366F1]"
+                title="Katman Ekle"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+
+            <Reorder.Group axis="y" values={layers} onReorder={setLayers} className="space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+              {layers.map((layer) => (
+                <div key={layer.id} className="space-y-2">
+                  <Reorder.Item 
+                    value={layer}
+                    className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5 hover:border-[#6366F1]/30 transition-all group"
+                  >
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="cursor-grab active:cursor-grabbing text-white/20 hover:text-white transition-colors">
+                        <GripVertical className="w-4 h-4" />
+                      </div>
+                      <div 
+                        className="w-3 h-3 rounded-full flex-shrink-0" 
+                        style={{ backgroundColor: layer.color }} 
+                        onClick={() => {
+                          const newColor = prompt('Katman Rengi (HEX):', layer.color);
+                          if (newColor) setLayers(layers.map(l => l.id === layer.id ? { ...l, color: newColor } : l));
+                        }}
+                      />
+                      <input 
+                        value={layer.name}
+                        onChange={(e) => setLayers(layers.map(l => l.id === layer.id ? { ...l, name: e.target.value } : l))}
+                        className="bg-transparent text-xs font-bold text-white/60 focus:outline-none focus:text-white truncate"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button 
+                        onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, locked: !l.locked } : l))}
+                        className={cn(
+                          "p-1.5 rounded-lg transition-colors",
+                          layer.locked ? "text-[#6366F1]" : "text-white/20 hover:text-white"
+                        )}
+                        title={layer.locked ? "Kilidi Aç" : "Kilitle"}
+                      >
+                        {layer.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                      </button>
+                      <button 
+                        onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l))}
+                        className={cn(
+                          "p-1.5 rounded-lg transition-colors",
+                          layer.visible ? "text-white/40 hover:text-white" : "text-red-500/60 hover:text-red-500"
+                        )}
+                        title={layer.visible ? "Gizle" : "Göster"}
+                      >
+                        {layer.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      </button>
+                      <button 
+                        onClick={() => mergeLayerDown(layer.id)}
+                        className="p-1.5 text-white/20 hover:text-[#6366F1] transition-colors"
+                        title="Alt katmanla birleştir"
+                      >
+                        <Combine className="w-3.5 h-3.5" />
+                      </button>
+                      {layer.id !== 'default' && (
+                        <button onClick={() => deleteLayer(layer.id)} className="p-1.5 text-white/20 hover:text-red-500 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </Reorder.Item>
+                  <div className="px-3 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[8px] font-black text-white/20 uppercase tracking-tighter w-8">Opaklık</span>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.1" 
+                        value={layer.opacity} 
+                        onChange={(e) => setLayers(layers.map(l => l.id === layer.id ? { ...l, opacity: parseFloat(e.target.value) } : l))}
+                        className="flex-1 accent-[#6366F1] h-1.5 rounded-full bg-white/5 opacity-50 hover:opacity-100 transition-opacity"
+                      />
+                      <span className="text-[10px] font-bold text-white/40 w-6">{(layer.opacity * 100).toFixed(0)}%</span>
+                    </div>
+                    <select 
+                      value={layer.blendMode}
+                      onChange={(e) => setLayers(layers.map(l => l.id === layer.id ? { ...l, blendMode: e.target.value } : l))}
+                      className="w-full bg-white/5 border border-white/5 rounded-lg px-2 py-1.5 text-[8px] font-black text-white/40 focus:outline-none focus:text-white uppercase tracking-widest"
+                    >
+                      <option value="normal">NORMAL</option>
+                      <option value="multiply">ÇARPMA</option>
+                      <option value="screen">EKRAN</option>
+                      <option value="overlay">KAPLAMA</option>
+                      <option value="darken">KOYU</option>
+                      <option value="lighten">AYDINLIK</option>
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </Reorder.Group>
+            
+            <div className="mt-6 pt-6 border-t border-white/5">
+               <div className="flex items-center justify-between text-[10px] font-bold text-white/20 uppercase tracking-widest">
+                  <span>Toplam</span>
+                  <span className="text-white/40">{objects.length} Nesne</span>
+               </div>
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+
+      {/* Floating Properties Panel (Moved to Left-ish) */}
+      <AnimatePresence>
+        {selectedIds.length > 0 && !presentationMode && (
+          <motion.aside 
+            initial={{ x: -300, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -300, opacity: 0 }}
+            className="fixed top-24 left-[20rem] w-80 bg-white/50 backdrop-blur-3xl border border-white/20 rounded-[2.5rem] p-8 z-50 shadow-2xl overflow-y-auto max-h-[80vh] custom-scrollbar text-black"
+          >
+          <div className="flex items-center justify-between mb-8">
+            <h2 className="text-[10px] font-black text-black/40 uppercase tracking-[0.3em]">
+              {selectedIds.length > 1 ? `${selectedIds.length} NESNE SEÇİLİ` : 'PROJE ÖZELLİKLERİ'}
             </h2>
-            <button onClick={() => setSelectedIds([])} className="text-white/20 hover:text-white"><X className="w-4 h-4" /></button>
+            <button onClick={() => setSelectedIds([])} className="text-black/20 hover:text-black transition-colors"><X className="w-5 h-5" /></button>
           </div>
           
-          <div className="space-y-6">
+          <div className="space-y-8">
+            {selectedIds.length > 1 && (
+              <div>
+                <label className="block text-[10px] font-black text-black/40 uppercase mb-4 tracking-widest italic">Hizalama</label>
+                <div className="grid grid-cols-6 gap-2">
+                  {[
+                    { id: 'left', icon: AlignLeft, label: 'Sola' },
+                    { id: 'center', icon: AlignCenter, label: 'Orta (Y)' },
+                    { id: 'right', icon: AlignRight, label: 'Sağa' },
+                    { id: 'top', icon: ArrowUp, label: 'Üste' },
+                    { id: 'middle', icon: ArrowDown, label: 'Orta (D)' }, // Using ArrowDown for middle for now or similar
+                    { id: 'bottom', icon: ArrowDown, label: 'Alta' },
+                  ].map(align => (
+                    <button
+                      key={align.id}
+                      onClick={() => handleAlign(align.id as any)}
+                      className="p-3 bg-black/5 hover:bg-black/10 rounded-xl flex items-center justify-center transition-all group"
+                      title={align.label}
+                    >
+                      <align.icon className="w-4 h-4 text-black/40 group-hover:text-black" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div>
-              <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Renk</label>
-              <div className="flex flex-wrap gap-2">
-                {['#6366F1', '#00FF00', '#0000FF', '#FFFFFF', '#FFFF00', '#FF00FF', '#000000'].map(color => (
+              <label className="block text-[10px] font-black text-black/40 uppercase mb-4 tracking-widest italic">Kontur Rengi</label>
+              <div className="flex flex-wrap gap-2.5 mb-4">
+                {['#6366F1', '#10B981', '#F59E0B', '#EF4444', '#000000', '#FFFFFF'].map(color => (
                   <button
                     key={color}
                     onClick={() => {
-                      setObjects(objects.map(o => selectedIds.includes(o.id) ? { ...o, stroke: color } : o));
+                      const newObjects = objects.map(o => selectedIds.includes(o.id) ? { ...o, stroke: color } : o);
+                      pushHistory({ type: 'UPDATE', desc: 'Kontur Rengi Değiştirildi', after: newObjects });
+                      setObjects(newObjects);
                     }}
                     className={cn(
-                      "w-6 h-6 rounded-full border-2",
-                      objects.find(o => o.id === selectedIds[0])?.stroke === color ? "border-white" : "border-transparent"
+                      "w-8 h-8 rounded-xl border-4 transition-all hover:scale-110",
+                      objects.find(o => o.id === selectedIds[0])?.stroke === color ? "border-black/20 scale-110 shadow-lg" : "border-transparent"
                     )}
                     style={{ backgroundColor: color }}
                   />
                 ))}
               </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={objects.find(o => o.id === selectedIds[0])?.stroke || ''}
+                  onChange={(e) => {
+                    const color = e.target.value;
+                    if (/^#[0-9A-F]{6}$/i.test(color) || color === 'transparent') {
+                      const newObjects = objects.map(o => selectedIds.includes(o.id) ? { ...o, stroke: color } : o);
+                      setObjects(newObjects);
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const color = e.target.value;
+                    const newObjects = objects.map(o => selectedIds.includes(o.id) ? { ...o, stroke: color } : o);
+                    pushHistory({ type: 'UPDATE', desc: 'HEX Kontur Değiştirildi', after: newObjects });
+                  }}
+                  placeholder="#HEX"
+                  className="w-full bg-black/5 border border-black/5 rounded-xl px-4 py-2 text-xs font-bold focus:outline-none focus:border-black/20 text-black appearance-none uppercase pr-10"
+                />
+                <div 
+                   className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border border-black/10"
+                   style={{ backgroundColor: objects.find(o => o.id === selectedIds[0])?.stroke || 'transparent' }}
+                />
+              </div>
             </div>
 
             {selectedIds.length === 1 && (
-              <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Düzenleme</label>
-                <div className="grid grid-cols-4 gap-1">
-                  <button onClick={() => handleMoveZ('front')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="En Öne Getir"><ArrowUp className="w-4 h-4" /></button>
-                  <button onClick={() => handleMoveZ('back')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="En Arkaya Gönder"><ArrowDown className="w-4 h-4" /></button>
-                  <button onClick={() => handleAlign('left')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="Sola Hizala">L</button>
-                  <button onClick={() => handleAlign('right')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="Sağa Hizala">R</button>
-                  <button onClick={() => handleAlign('center')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="Ortaya Hizala">C</button>
-                  <button onClick={() => handleAlign('top')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="Üste Hizala">T</button>
-                  <button onClick={() => handleAlign('bottom')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="Alta Hizala">B</button>
-                  <button onClick={() => handleAlign('middle')} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg" title="Dikey Ortala">M</button>
-                </div>
-              </div>
-            )}
-
-            {selectedIds.length === 1 && (
-              <div className="flex flex-col gap-2">
-                <label className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Katman</label>
+              <div className="flex flex-col gap-3">
+                <label className="text-[10px] font-black text-black/20 uppercase tracking-widest italic">Katman Yönetimi</label>
                 <select
                   value={objects.find(o => o.id === selectedIds[0])?.layer || 'default'}
-                  onChange={(e) => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, layer: e.target.value } : o))}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs focus:outline-none focus:border-[#6366F1] text-white"
+                  onChange={(e) => {
+                    const newLayer = e.target.value;
+                    const newObjects = objects.map(o => o.id === selectedIds[0] ? { ...o, layer: newLayer } : o);
+                    setObjects(newObjects);
+                    pushHistory({ type: 'LAYER_CHANGE', desc: 'Nesne Katmanı Değiştirildi', after: newObjects });
+                  }}
+                  className="w-full bg-black/5 border border-black/5 rounded-[1.25rem] p-4 text-xs font-bold focus:outline-none focus:border-black/20 text-black appearance-none cursor-pointer"
                 >
                   {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                 </select>
@@ -1226,59 +1520,95 @@ export function SurveyCanvas() {
             )}
 
             {selectedIds.length === 1 && ['sticky', 'text'].includes(objects.find(o => o.id === selectedIds[0])?.type || '') && (
-              <div className="space-y-4">
+              <div className="space-y-6">
                 <div>
-                  <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Metin</label>
+                  <label className="block text-[10px] font-black text-black/20 uppercase mb-2 tracking-widest italic">Metin İçeriği</label>
                   <textarea
                     value={objects.find(o => o.id === selectedIds[0])?.text || ''}
                     onChange={(e) => {
                       setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, text: e.target.value } : o));
                     }}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs focus:outline-none focus:border-[#6366F1] text-white"
-                    rows={3}
+                    className="w-full bg-black/5 border border-black/5 rounded-[1.25rem] p-4 text-sm font-bold focus:outline-none focus:border-black/20 text-black placeholder:text-black/10"
+                    rows={4}
+                    placeholder="Metni buraya girin..."
                   />
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Font</label>
-                  <select
-                    value={objects.find(o => o.id === selectedIds[0])?.fontFamily || 'Inter'}
-                    onChange={(e) => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, fontFamily: e.target.value } : o))}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs focus:outline-none focus:border-[#6366F1] text-white"
-                  >
-                    <option value="Inter">Inter</option>
-                    <option value="Arial">Arial</option>
-                    <option value="Times New Roman">Times New Roman</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Hizalama</label>
-                  <div className="flex gap-2">
-                    <button onClick={() => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, align: 'left' } : o))} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg">L</button>
-                    <button onClick={() => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, align: 'center' } : o))} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg">C</button>
-                    <button onClick={() => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, align: 'right' } : o))} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg">R</button>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-black/20 uppercase mb-2 tracking-widest italic">Font</label>
+                    <select
+                      value={objects.find(o => o.id === selectedIds[0])?.fontFamily || 'Inter'}
+                      onChange={(e) => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, fontFamily: e.target.value } : o))}
+                      className="w-full bg-black/5 border border-black/5 rounded-xl p-3 text-[10px] font-black focus:outline-none focus:border-black/20 text-black appearance-none cursor-pointer"
+                    >
+                      <option value="Inter">INTER (SANS)</option>
+                      <option value="Playfair Display">PLAYFAIR (SERIF)</option>
+                      <option value="JetBrains Mono">JETBRAINS (MONO)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-black/20 uppercase mb-2 tracking-widest italic">Hizalama</label>
+                    <div className="flex bg-black/5 p-1 rounded-xl border border-black/5">
+                      {[
+                        { id: 'left', icon: <AlignLeft className="w-4 h-4" /> },
+                        { id: 'center', icon: <AlignCenter className="w-4 h-4" /> },
+                        { id: 'right', icon: <AlignRight className="w-4 h-4" /> },
+                      ].map(align => (
+                        <button
+                          key={align.id}
+                          onClick={() => {
+                            setObjects(objects.map(o => {
+                              if (o.id === selectedIds[0]) {
+                                return { ...o, align: align.id as 'left' | 'center' | 'right' };
+                              }
+                              return o;
+                            }));
+                          }}
+                          className={cn(
+                            "flex-1 flex items-center justify-center p-2 rounded-lg transition-all",
+                            objects.find(o => o.id === selectedIds[0])?.align === align.id ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
+                          )}
+                        >
+                          {align.icon}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
             )}
 
             {selectedIds.length === 1 && objects.find(o => o.id === selectedIds[0])?.type === 'measure' && (
-              <div className="space-y-4">
+              <div className="space-y-6 pt-6 border-t border-black/5">
                 <div>
-                  <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Gerçek Ölçü</label>
-                  <input
-                    type="number"
-                    value={objects.find(o => o.id === selectedIds[0])?.realMeasurement || ''}
-                    onChange={(e) => {
-                      setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, realMeasurement: e.target.value } : o));
-                    }}
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs focus:outline-none focus:border-[#6366F1] text-white"
-                  />
+                  <label className="block text-[10px] font-black text-black/20 uppercase mb-2 tracking-widest italic tracking-widest">Saha Ölçüsü (Gerçek)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      value={objects.find(o => o.id === selectedIds[0])?.realMeasurement || ''}
+                      onChange={(e) => {
+                        setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, realMeasurement: e.target.value } : o));
+                      }}
+                      className="flex-1 bg-black/5 border border-black/5 rounded-xl px-4 py-3 text-sm font-black focus:outline-none focus:border-black/20 text-black"
+                      placeholder="0.0"
+                    />
+                    <select
+                      value={objects.find(o => o.id === selectedIds[0])?.unit || 'cm'}
+                      onChange={(e) => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, unit: e.target.value } : o))}
+                      className="w-20 bg-black/5 border border-black/5 rounded-xl px-2 py-3 text-[10px] font-black italic text-black appearance-none text-center cursor-pointer"
+                    >
+                      <option value="cm">CM</option>
+                      <option value="mm">MM</option>
+                      <option value="m">M</option>
+                    </select>
+                  </div>
                 </div>
                 <button
                   onClick={handleSetReference}
-                  className="w-full bg-[#6366F1] text-black text-xs font-bold px-4 py-2 rounded-xl hover:scale-105 transition-transform"
+                  className="w-full bg-black text-white text-[10px] font-black uppercase italic tracking-widest py-4 rounded-2xl hover:bg-[#6366F1] transition-all shadow-xl active:scale-[0.98]"
                 >
-                  Referans Olarak Ayarla
+                  <Ruler className="w-3.5 h-3.5 inline mr-2" />
+                  Bu Ölçüyü Referans Yap
                 </button>
               </div>
             )}
@@ -1318,23 +1648,170 @@ export function SurveyCanvas() {
               </div>
             )}
 
-            {selectedIds.length === 1 && objects.find(o => o.id === selectedIds[0])?.type === 'sticky' && (
-              <div>
-                <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Arkaplan</label>
-                <div className="flex flex-wrap gap-2">
-                  {['#FFFF88', '#FFCCFF', '#CCFFFF', '#CCFFCC', '#FFCCCC'].map(color => (
+            {selectedIds.length === 1 && (['rect', 'ellipse', 'polygon', 'star', 'sticky'].includes(objects.find(o => o.id === selectedIds[0])?.type || '')) && (
+              <div className="space-y-4 pt-4 border-t border-white/10">
+                <label className="block text-[10px] font-bold text-white/20 uppercase mb-2 tracking-wider">Dolgu Stili</label>
+                <div className="flex bg-white/5 border border-white/10 rounded-xl p-1">
+                  {[
+                    { id: 'color', label: 'Düz' },
+                    { id: 'linear-gradient', label: 'Linear' },
+                    { id: 'radial-gradient', label: 'Radial' },
+                  ].map(type => (
                     <button
-                      key={color}
+                      key={type.id}
                       onClick={() => {
-                        setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, fill: color } : o));
+                        setObjects(objects.map(o => o.id === selectedIds[0] ? { 
+                          ...o, 
+                          fillPriority: type.id as any,
+                          fillLinearGradientColorStops: type.id === 'linear-gradient' ? [0, o.fill || '#6366F1', 1, '#000000'] : o.fillLinearGradientColorStops,
+                          fillRadialGradientColorStops: type.id === 'radial-gradient' ? [0, o.fill || '#6366F1', 1, '#000000'] : o.fillRadialGradientColorStops
+                        } : o));
                       }}
                       className={cn(
-                        "w-6 h-6 rounded-lg border-2",
-                        objects.find(o => o.id === selectedIds[0])?.fill === color ? "border-white" : "border-transparent"
+                        "flex-1 py-1.5 rounded-lg text-[10px] font-bold transition-all",
+                        objects.find(o => o.id === selectedIds[0])?.fillPriority === type.id || (type.id === 'color' && !objects.find(o => o.id === selectedIds[0])?.fillPriority)
+                          ? "bg-[#6366F1] text-black"
+                          : "text-white/40 hover:text-white"
                       )}
-                      style={{ backgroundColor: color }}
-                    />
+                    >
+                      {type.label}
+                    </button>
                   ))}
+                </div>
+
+                {(!objects.find(o => o.id === selectedIds[0])?.fillPriority || objects.find(o => o.id === selectedIds[0])?.fillPriority === 'color') && (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap gap-2">
+                      {['#6366F1', '#10B981', '#F59E0B', '#EF4444', '#FFFFFF', 'transparent'].map(color => (
+                        <button
+                          key={color}
+                          onClick={() => {
+                            const newObjects = objects.map(o => o.id === selectedIds[0] ? { ...o, fill: color } : o);
+                            pushHistory({ type: 'UPDATE', desc: 'Dolgu Rengi Değiştirildi', after: newObjects });
+                            setObjects(newObjects);
+                          }}
+                          className={cn(
+                            "w-6 h-6 rounded-lg border-2",
+                            objects.find(o => o.id === selectedIds[0])?.fill === color ? "border-white" : "border-transparent"
+                          )}
+                          style={{ backgroundColor: color === 'transparent' ? 'transparent' : color }}
+                          title={color === 'transparent' ? 'Transparan' : color}
+                        >
+                           {color === 'transparent' && <X className="w-3 h-3 text-white/20 mx-auto" />}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={objects.find(o => o.id === selectedIds[0])?.fill || ''}
+                        onChange={(e) => {
+                          const color = e.target.value;
+                          if (/^#[0-9A-F]{6}$/i.test(color) || color === 'transparent') {
+                             const newObjects = objects.map(o => o.id === selectedIds[0] ? { ...o, fill: color } : o);
+                             setObjects(newObjects);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const color = e.target.value;
+                          const newObjects = objects.map(o => o.id === selectedIds[0] ? { ...o, fill: color } : o);
+                          pushHistory({ type: 'UPDATE', desc: 'HEX Dolgu Değiştirildi', after: newObjects });
+                        }}
+                        placeholder="#HEX Dolgu"
+                        className="w-full bg-black/5 border border-black/5 rounded-xl px-4 py-2 text-xs font-bold focus:outline-none focus:border-black/20 text-black pr-10 uppercase"
+                      />
+                      <div 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border border-black/10"
+                        style={{ backgroundColor: objects.find(o => o.id === selectedIds[0])?.fill || 'transparent' }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {(objects.find(o => o.id === selectedIds[0])?.fillPriority === 'linear-gradient' || objects.find(o => o.id === selectedIds[0])?.fillPriority === 'radial-gradient') && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[8px] font-black text-white/20 uppercase mb-1 tracking-widest">Başlangıç</label>
+                        <input 
+                          type="color" 
+                          value={objects.find(o => o.id === selectedIds[0])?.fillPriority === 'linear-gradient' ? (objects.find(o => o.id === selectedIds[0])?.fillLinearGradientColorStops?.[1] as string || '#6366F1') : (objects.find(o => o.id === selectedIds[0])?.fillRadialGradientColorStops?.[1] as string || '#6366F1')}
+                          onChange={(e) => {
+                            const color = e.target.value;
+                            setObjects(objects.map(o => {
+                              if (o.id === selectedIds[0]) {
+                                if (o.fillPriority === 'linear-gradient') {
+                                  return { ...o, fillLinearGradientColorStops: [0, color, 1, o.fillLinearGradientColorStops?.[3] || '#000000'] };
+                                } else {
+                                  return { ...o, fillRadialGradientColorStops: [0, color, 1, o.fillRadialGradientColorStops?.[3] || '#000000'] };
+                                }
+                              }
+                              return o;
+                            }));
+                          }}
+                          className="w-full h-10 bg-white/5 border border-white/10 rounded-xl cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[8px] font-black text-white/20 uppercase mb-1 tracking-widest">Bitiş</label>
+                        <input 
+                          type="color" 
+                          value={objects.find(o => o.id === selectedIds[0])?.fillPriority === 'linear-gradient' ? (objects.find(o => o.id === selectedIds[0])?.fillLinearGradientColorStops?.[3] as string || '#000000') : (objects.find(o => o.id === selectedIds[0])?.fillRadialGradientColorStops?.[3] as string || '#000000')}
+                          onChange={(e) => {
+                            const color = e.target.value;
+                            setObjects(objects.map(o => {
+                              if (o.id === selectedIds[0]) {
+                                if (o.fillPriority === 'linear-gradient') {
+                                  return { ...o, fillLinearGradientColorStops: [0, o.fillLinearGradientColorStops?.[1] || '#6366F1', 1, color] };
+                                } else {
+                                  return { ...o, fillRadialGradientColorStops: [0, o.fillRadialGradientColorStops?.[1] || '#6366F1', 1, color] };
+                                }
+                              }
+                              return o;
+                            }));
+                          }}
+                          className="w-full h-10 bg-white/5 border border-white/10 rounded-xl cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedIds.length === 1 && objects.find(o => o.id === selectedIds[0])?.type === 'measure' && (
+              <div className="pt-4 border-t border-white/10 space-y-4">
+                <label className="block text-[10px] font-bold text-white/20 uppercase tracking-wider">Ölçü Ayarları</label>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[8px] font-black text-white/20 uppercase mb-1.5 tracking-widest">Özel Etiket</label>
+                    <input
+                      type="text"
+                      value={objects.find(o => o.id === selectedIds[0])?.measurementLabel || ''}
+                      onChange={(e) => {
+                        setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, measurementLabel: e.target.value } : o));
+                      }}
+                      placeholder="Etiket (örn. 'Yükseklik')"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-[#6366F1] text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[8px] font-black text-white/20 uppercase mb-1.5 tracking-widest">Ok Stili</label>
+                    <div className="grid grid-cols-4 gap-1 p-1 bg-white/5 rounded-xl border border-white/10">
+                      {(['none', 'start', 'end', 'both'] as const).map(style => (
+                        <button
+                          key={style}
+                          onClick={() => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, arrowStyle: style } : o))}
+                          className={cn(
+                            "py-1.5 rounded-lg text-[8px] font-black uppercase transition-all",
+                            (objects.find(o => o.id === selectedIds[0])?.arrowStyle || 'none') === style ? "bg-white text-black shadow-lg" : "text-white/40 hover:text-white"
+                          )}
+                        >
+                          {style}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1460,8 +1937,9 @@ export function SurveyCanvas() {
               </button>
             </div>
           </div>
-        </aside>
-      )}
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       {/* Zoom Controls */}
       <div className="fixed bottom-8 right-8 flex items-center gap-2 bg-white/[0.03] backdrop-blur-2xl border border-white/10 p-2 rounded-2xl shadow-2xl z-50">
@@ -1489,8 +1967,52 @@ export function SurveyCanvas() {
       </div>
 
       {/* Canvas Area */}
-      <div className="w-full h-full cursor-crosshair">
-        <Stage
+            <div className="w-full h-full cursor-crosshair relative">
+              {/* History Step Indicator with Hover List */}
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-black/80 backdrop-blur-xl border border-white/10 px-4 py-2 rounded-full flex items-center gap-3 shadow-2xl group/history">
+                <div className="flex items-center gap-1">
+                  <button 
+                    onClick={undo} 
+                    disabled={historyStep < 0}
+                    className="p-1 text-white/40 hover:text-white disabled:opacity-20 transition-colors"
+                  >
+                    <Undo className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={redo} 
+                    disabled={historyStep >= history.length - 1}
+                    className="p-1 text-white/40 hover:text-white disabled:opacity-20 transition-colors"
+                  >
+                    <Redo className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="w-px h-4 bg-white/10" />
+                <div className="relative text-[10px] font-black text-white/60 tracking-widest uppercase flex items-center gap-2 cursor-help">
+                  <span className="text-[#6366F1]">{historyStep + 1}</span>
+                  <span className="opacity-20">/</span>
+                  <span>{history.length}</span>
+                  {history[historyStep] && (
+                    <span className="ml-2 text-[8px] text-white/30 border-l border-white/10 pl-2 max-w-[120px] truncate">
+                      {history[historyStep].desc}
+                    </span>
+                  )}
+                  
+                  {/* History Tooltip/List */}
+                  <div className="absolute top-10 left-1/2 -translate-x-1/2 w-48 bg-black/90 backdrop-blur-2xl border border-white/10 rounded-xl p-2 opacity-0 group-hover/history:opacity-100 pointer-events-none transition-all shadow-3xl">
+                    <div className="text-[8px] font-bold text-white/20 mb-2 px-2">GEÇMİŞ</div>
+                    <div className="space-y-1">
+                      {history.slice(Math.max(0, historyStep - 4), historyStep + 1).map((h, i) => (
+                        <div key={i} className="text-[9px] text-white/60 px-2 py-1 rounded-md bg-white/5 border border-white/5 flex items-center gap-2">
+                           <div className="w-1 h-1 rounded-full bg-[#6366F1]" />
+                           <span className="truncate">{h.desc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <Stage
           width={stageSize.width}
           height={stageSize.height}
           onMouseDown={handleMouseDown}
@@ -1519,6 +2041,8 @@ export function SurveyCanvas() {
               />
             )}
             {objects.map((obj) => {
+              const layer = layers.find(l => l.id === (obj.layer || 'default'));
+              const isSelected = selectedIds.includes(obj.id);
               const commonProps = {
                 id: obj.id,
                 x: obj.x,
@@ -1526,10 +2050,14 @@ export function SurveyCanvas() {
                 rotation: obj.rotation || 0,
                 scaleX: obj.scaleX || 1,
                 scaleY: obj.scaleY || 1,
-                stroke: obj.stroke,
-                strokeWidth: obj.strokeWidth / scale,
-                draggable: tool === 'select' && !obj.isLocked,
-                visible: (layers.find(l => l.id === (obj.layer || 'default'))?.visible !== false) && (obj.visible !== false),
+                stroke: obj.stroke || layer?.color || '#6366F1',
+                strokeWidth: (obj.strokeWidth || 2) / scale,
+                draggable: tool === 'select' && !obj.isLocked && !layer?.locked,
+                visible: (layer?.visible !== false) && (obj.visible !== false),
+                opacity: (layer?.opacity ?? 1) * (obj.opacity ?? 1),
+                globalCompositeOperation: (layer?.blendMode === 'normal' ? 'source-over' : (layer?.blendMode as any)) || 'source-over',
+                dash: obj.dash,
+                ...getFill(obj),
                 onClick: (e: any) => {
                   if (tool !== 'select') return;
                   const id = obj.id;
@@ -1575,6 +2103,7 @@ export function SurveyCanvas() {
                     return o;
                   });
                   setObjects(updated);
+                  pushHistory({ type: 'UPDATE', desc: 'Nesneler Taşındı', after: updated });
                 }
               };
 
@@ -1616,28 +2145,67 @@ export function SurveyCanvas() {
                       x={x2}
                       y={y2}
                     />
-                    <Group x={midX} y={midY} rotation={angle}>
+                    <Group 
+                      x={midX + (obj.labelOffset?.x || 0)} 
+                      y={midY + (obj.labelOffset?.y || 0)} 
+                      rotation={angle}
+                      draggable
+                      onDragEnd={(e) => {
+                        const newObjects = objects.map(o => o.id === obj.id ? { 
+                          ...o, 
+                          labelOffset: { 
+                            x: e.target.x() - midX, 
+                            y: e.target.y() - midY 
+                          } 
+                        } : o);
+                        setObjects(newObjects);
+                      }}
+                    >
                       <Rect 
                         fill={isRef ? '#00FF00' : "#1a1a1a"} 
-                        width={isRef ? 80 / scale : 60 / scale} 
+                        width={isRef ? 120 / scale : 100 / scale} 
                         height={20 / scale} 
-                        x={isRef ? -40 / scale : -30 / scale} 
+                        x={isRef ? -60 / scale : -50 / scale} 
                         y={-10 / scale} 
                         cornerRadius={4 / scale}
                       />
                       <Text 
-                        text={`${isRef ? 'REF: ' : ''}${obj.realMeasurement} ${obj.unit || 'cm'}`} 
+                        text={`${obj.measurementLabel ? obj.measurementLabel + ': ' : ''}${isRef ? 'REF: ' : ''}${obj.realMeasurement} ${obj.unit || 'cm'}`} 
                         fontSize={12 / scale} 
                         fill={isRef ? '#000000' : "#ffffff"} 
                         align="center" 
                         verticalAlign="middle" 
-                        width={isRef ? 80 / scale : 60 / scale}
+                        width={isRef ? 120 / scale : 100 / scale}
                         height={20 / scale}
-                        x={isRef ? -40 / scale : -30 / scale}
+                        x={isRef ? -60 / scale : -50 / scale}
                         y={-10 / scale}
                         fontStyle="bold"
                       />
                     </Group>
+                    {obj.arrowStyle !== 'none' && (
+                      <>
+                        {(obj.arrowStyle === 'start' || obj.arrowStyle === 'both') && (
+                          <Arrow 
+                             points={[points[2]/4, points[3]/4, 0, 0]}
+                             pointerLength={10/scale}
+                             pointerWidth={10/scale}
+                             fill={strokeColor}
+                             stroke={strokeColor}
+                             strokeWidth={2/scale}
+                          />
+                        )}
+                        {(obj.arrowStyle === 'end' || obj.arrowStyle === 'both') && (
+                          <Arrow 
+                             points={[points[2]*0.75, points[3]*0.75, x2, y2]}
+                             pointerLength={10/scale}
+                             pointerWidth={10/scale}
+                             fill={strokeColor}
+                             stroke={strokeColor}
+                             strokeWidth={2/scale}
+                          />
+                        )}
+                      </>
+                    )}
                   </Group>
                 );
               }
@@ -1728,6 +2296,11 @@ export function SurveyCanvas() {
                 ref={transformerRef}
                 rotateEnabled={true}
                 borderEnabled={true}
+                anchorSize={8}
+                anchorCornerRadius={2}
+                anchorStroke={layers.find(l => l.id === (objects.find(o => o.id === selectedIds[0])?.layer || 'default'))?.color || '#6366F1'}
+                anchorFill={layers.find(l => l.id === (objects.find(o => o.id === selectedIds[0])?.layer || 'default'))?.color || '#6366F1'}
+                borderStroke={layers.find(l => l.id === (objects.find(o => o.id === selectedIds[0])?.layer || 'default'))?.color || '#6366F1'}
                 borderDash={[6, 2]}
                 enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'top-center', 'bottom-center', 'left-center', 'right-center']}
                 onTransformEnd={handleTransformEnd}
