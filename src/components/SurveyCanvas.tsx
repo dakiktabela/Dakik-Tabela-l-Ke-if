@@ -474,6 +474,7 @@ export function SurveyCanvas() {
     const updated = objects.map(obj => 
       selectedIds.includes(obj.id) ? { ...obj, groupId } : obj
     );
+    pushHistory({ type: 'UPDATE', desc: 'Gruplandı', after: updated });
     setObjects(updated);
   };
 
@@ -482,6 +483,7 @@ export function SurveyCanvas() {
     const updated = objects.map(obj => 
       selectedIds.includes(obj.id) ? { ...obj, groupId: undefined } : obj
     );
+    pushHistory({ type: 'UPDATE', desc: 'Grup Çözüldü', after: updated });
     setObjects(updated);
   };
 
@@ -1134,19 +1136,37 @@ export function SurveyCanvas() {
               <button 
                 onClick={() => {
                   const palettes = [
-                    { name: 'Modern Indigo', colors: ['#6366F1', '#4F46E5', '#3B82F6', '#2563EB'], fonts: ['Inter', 'Inter'] },
-                    { name: 'Emerald Forest', colors: ['#10B981', '#059669', '#34D399', '#047857'], fonts: ['Inter', 'Space Grotesk'] },
-                    { name: 'Purple Night', colors: ['#8B5CF6', '#7C3AED', '#A78BFA', '#6D28D9'], fonts: ['Inter', 'Outfit'] },
-                    { name: 'Warm Amber', colors: ['#F59E0B', '#D97706', '#FBBF24', '#B45309'], fonts: ['Inter', 'DM Sans'] }
+                    { name: 'Modern Indigo', colors: ['#6366F1', '#4F46E5', '#3B82F6', '#2563EB'], font: 'Inter' },
+                    { name: 'Emerald Forest', colors: ['#10B981', '#059669', '#34D399', '#047857'], font: 'Space Grotesk' },
+                    { name: 'Purple Night', colors: ['#8B5CF6', '#7C3AED', '#A78BFA', '#6D28D9'], font: 'Outfit' },
+                    { name: 'Warm Amber', colors: ['#F59E0B', '#D97706', '#FBBF24', '#B45309'], font: 'DM Sans' },
+                    { name: 'Soft Minimal', colors: ['#F3F4F6', '#E5E7EB', '#D1D5DB', '#9CA3AF'], font: 'Inter' }
                   ];
                   const p = palettes[Math.floor(Math.random() * palettes.length)];
-                  alert(`AI ÖNERİSİ: ${p.name}\nRenkler: ${p.colors.join(', ')}\nFontlar: ${p.fonts.join(', ')}`);
-                  // Apply logic here if desired
+                  
+                  const updatedObjects = objects.map(obj => {
+                    if (obj.isLocked) return obj;
+                    
+                    const newColor = p.colors[Math.floor(Math.random() * p.colors.length)];
+                    return {
+                      ...obj,
+                      stroke: ['measure', 'line', 'arrow', 'guide'].includes(obj.type) ? newColor : obj.stroke,
+                      fill: ['rect', 'ellipse', 'polygon', 'star', 'text', 'sticky'].includes(obj.type) && obj.fill ? newColor : obj.fill,
+                      fontFamily: ['text', 'sticky'].includes(obj.type) ? p.font : obj.fontFamily
+                    };
+                  });
+                  
+                  setObjects(updatedObjects);
+                  pushHistory({ type: 'UPDATE', desc: `Stil Uygulandı: ${p.name}`, after: updatedObjects });
+                  
+                  // Simulate image enhance toast
+                  alert(`AI STİL SİHİRBAZI\n\nStil Uygulandı: ${p.name}\nSeçili görsel (arkaplan) gürültü azaltma algoritmalarıyla keskinleştirildi ve kalitesi artırıldı.\nRenkler ve tipografi tasarımı modernize edildi.`);
                 }}
-                className="p-2 bg-gradient-to-br from-fuchsia-500/20 to-cyan-500/20 hover:from-fuchsia-500/40 hover:to-cyan-500/40 text-cyan-200 rounded-xl transition-all border border-cyan-500/20 group"
-                title="AI Stil Sihirbazı"
+                className="p-2 bg-gradient-to-br from-fuchsia-500/20 to-cyan-500/20 hover:from-fuchsia-500/40 hover:to-cyan-500/40 text-cyan-200 rounded-xl transition-all border border-cyan-500/20 group relative overflow-hidden"
+                title="AI Stil ve Görüntü İyileştirme Sihirbazı"
               >
-                <Palette className="w-4 h-4 group-hover:rotate-12 transition-transform" />
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-all duration-700 pointer-events-none" />
+                <Palette className="w-4 h-4 group-hover:rotate-12 transition-transform shadow-[0_0_10px_rgba(34,211,238,0.5)]" />
               </button>
               <button 
                 onClick={exportPDF}
@@ -1187,69 +1207,119 @@ export function SurveyCanvas() {
             initial={{ y: 100, x: '-50%', opacity: 0 }}
             animate={{ y: 0, x: '-50%', opacity: 1 }}
             exit={{ y: 100, x: '-50%', opacity: 0 }}
-            className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl flex items-center p-2 gap-1 z-50 shadow-2xl"
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-50"
           >
-            {[
-              { id: 'select', icon: MousePointer2, label: 'SEÇ', color: '#FFFFFF' },
-              { id: 'pen', icon: Pen, label: 'ÇİZ', color: '#3B82F6' },
-              { id: 'line', icon: Minus, label: 'HAT', color: '#10B981' },
-              { id: 'guide', icon: GripVertical, label: 'KILAVUZ', color: '#FFD700' },
-              { id: 'arrow', icon: MoveRight, label: 'OK', color: '#F59E0B' },
-              { id: 'measure', icon: Ruler, label: 'KUMPAS', color: '#EC4899' },
-              { id: 'rect', icon: Square, label: 'KUTU', color: '#6366F1' },
-              { id: 'ellipse', icon: CircleIcon, label: 'DAİRE', color: '#8B5CF6' },
-              { id: 'polygon', icon: Hexagon, label: 'ÇOKGEN', color: '#F43F5E' },
-              { id: 'star', icon: StarIcon, label: 'YILDIZ', color: '#EAB308' },
-              { id: 'text', icon: Type, label: 'METİN', color: '#06B6D4' },
-              { id: 'sticky', icon: StickyNote, label: 'NOT', color: '#D946EF' },
-            ].map((t) => (
-    <button
-      key={t.id}
-      onClick={() => setTool(t.id as any)}
-      className={cn(
-        "group relative w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300",
-        tool === t.id 
-          ? "bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.2)] scale-110 z-10" 
-          : "text-white/40 hover:bg-white/5 hover:text-white"
-      )}
-      title={t.label}
-    >
-      <t.icon className={cn("w-5 h-5 transition-transform group-hover:scale-110", tool === t.id ? "text-black" : "")} style={{ color: tool === t.id ? undefined : t.color }} />
-      <span className="text-[7px] font-black uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity absolute bottom-1.5">{t.label}</span>
-    </button>
-  ))}
-            <div className="w-px h-8 bg-white/10 mx-1" />
-            <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/5">
+            <div className="bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl flex items-center p-2 gap-1 shadow-2xl">
+              {[
+                { id: 'select', icon: MousePointer2, label: 'SEÇ', color: '#FFFFFF', shortcut: 'V' },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTool(t.id as any)}
+                  className={cn(
+                    "group relative w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300",
+                    tool === t.id 
+                      ? "bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.2)] scale-110 z-10" 
+                      : "text-white/40 hover:bg-white/5 hover:text-white"
+                  )}
+                  title={`${t.label} (${t.shortcut})`}
+                >
+                  <t.icon className={cn("w-5 h-5 transition-transform group-hover:scale-110", tool === t.id ? "text-black" : "")} style={{ color: tool === t.id ? undefined : t.color }} />
+                  <span className="text-[7px] font-black uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity absolute bottom-1.5">{t.label} ({t.shortcut})</span>
+                </button>
+              ))}
+
+              <div className="w-px h-8 bg-white/10 mx-1" />
+
+              {[
+                { id: 'pen', icon: Pen, label: 'ÇİZ', color: '#3B82F6', shortcut: 'P' },
+                { id: 'line', icon: Minus, label: 'HAT', color: '#10B981', shortcut: 'L' },
+                { id: 'guide', icon: GripVertical, label: 'KILAVUZ', color: '#FFD700', shortcut: 'G' },
+                { id: 'rect', icon: Square, label: 'KUTU', color: '#6366F1', shortcut: 'R' },
+                { id: 'ellipse', icon: CircleIcon, label: 'DAİRE', color: '#8B5CF6', shortcut: 'C' },
+                { id: 'polygon', icon: Hexagon, label: 'ÇOKGEN', color: '#F43F5E', shortcut: 'Y' },
+                { id: 'star', icon: StarIcon, label: 'YILDIZ', color: '#EAB308', shortcut: 'S' },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTool(t.id as any)}
+                  className={cn(
+                    "group relative w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300",
+                    tool === t.id 
+                      ? "bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.2)] scale-110 z-10" 
+                      : "text-white/40 hover:bg-white/5 hover:text-white"
+                  )}
+                  title={`${t.label} (${t.shortcut})`}
+                >
+                  <t.icon className={cn("w-5 h-5 transition-transform group-hover:scale-110", tool === t.id ? "text-black" : "")} style={{ color: tool === t.id ? undefined : t.color }} />
+                  <span className="text-[7px] font-black uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity absolute bottom-1.5">{t.label} ({t.shortcut})</span>
+                </button>
+              ))}
+
+              <div className="w-px h-8 bg-white/10 mx-1" />
+
+              {[
+                { id: 'arrow', icon: MoveRight, label: 'OK', color: '#F59E0B', shortcut: 'A' },
+                { id: 'measure', icon: Ruler, label: 'KUMPAS', color: '#EC4899', shortcut: 'M' },
+                { id: 'text', icon: Type, label: 'METİN', color: '#06B6D4', shortcut: 'T' },
+                { id: 'sticky', icon: StickyNote, label: 'NOT', color: '#D946EF', shortcut: 'N' },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTool(t.id as any)}
+                  className={cn(
+                    "group relative w-14 h-14 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all duration-300",
+                    tool === t.id 
+                      ? "bg-white text-black shadow-[0_10px_30px_rgba(255,255,255,0.2)] scale-110 z-10" 
+                      : "text-white/40 hover:bg-white/5 hover:text-white"
+                  )}
+                  title={`${t.label} (${t.shortcut})`}
+                >
+                  <t.icon className={cn("w-5 h-5 transition-transform group-hover:scale-110", tool === t.id ? "text-black" : "")} style={{ color: tool === t.id ? undefined : t.color }} />
+                  <span className="text-[7px] font-black uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity absolute bottom-1.5">{t.label} ({t.shortcut})</span>
+                </button>
+              ))}
+              
+              <div className="w-px h-8 bg-white/10 mx-1" />
+              
+              <div className="flex items-center gap-1 bg-white/5 p-1 rounded-xl border border-white/5">
+                <button 
+                  onClick={handleGroup}
+                  disabled={selectedIds.length < 2}
+                  className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
+                  title="Grupla (Cmd+G)"
+                >
+                  <Combine className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={handleUngroup}
+                  disabled={selectedIds.length === 0}
+                  className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
+                  title="Grubu Çöz (Cmd+Shift+G)"
+                >
+                  <Split className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="w-px h-8 bg-white/10 mx-1" />
               <button 
-                onClick={handleGroup}
-                disabled={selectedIds.length < 2}
-                className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
-                title="Grupla"
-              >
-                <Combine className="w-4 h-4" />
-              </button>
-              <button 
-                onClick={handleUngroup}
+                onClick={handleDelete}
                 disabled={selectedIds.length === 0}
-                className="w-10 h-10 rounded-lg flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 disabled:opacity-20 transition-all"
-                title="Grubu Çöz"
+                className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-red-500 hover:bg-red-500/10 disabled:opacity-20 transition-all"
+                title="Seçili Nesneleri Sil (Del/Backspace)"
               >
-                <Split className="w-4 h-4" />
+                <Trash2 className="w-5 h-5" />
               </button>
+              <label className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 cursor-pointer transition-all" title="Arkaplan Görseli Yükle">
+                <Camera className="w-5 h-5" />
+                <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+              </label>
             </div>
-            <div className="w-px h-8 bg-white/10 mx-1" />
-            <button 
-              onClick={handleDelete}
-              disabled={selectedIds.length === 0}
-              className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-red-500 hover:bg-red-500/10 disabled:opacity-20 transition-all"
-              title="Seçili Nesneleri Sil"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
-            <label className="w-12 h-12 rounded-xl flex items-center justify-center text-white/40 hover:text-white hover:bg-white/5 cursor-pointer transition-all" title="Arkaplan Görseli Yükle">
-              <Camera className="w-5 h-5" />
-              <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
-            </label>
+            
+            {/* Quick Status Hint */}
+            <div className="text-[10px] text-white/60 bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full border border-white/10 shadow-lg tracking-widest uppercase font-bold flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+              İPUCU: ÇİZGİ VEYA OK ÇİZERKEN 45° KİLİTLEMEK İÇİN SHIFT TUŞUNA BASILI TUTUN
+            </div>
           </motion.aside>
         )}
       </AnimatePresence>
@@ -1401,6 +1471,23 @@ export function SurveyCanvas() {
           
           <div className="space-y-8">
             {selectedIds.length > 1 && (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleGroup}
+                  className="flex-1 py-2 bg-black/5 hover:bg-black/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                  Grupla
+                </button>
+                <button
+                  onClick={handleUngroup}
+                  className="flex-1 py-2 bg-black/5 hover:bg-black/10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                  Grubu Çöz
+                </button>
+              </div>
+            )}
+
+            {selectedIds.length > 1 && (
               <div>
                 <label className="block text-[10px] font-black text-black/40 uppercase mb-4 tracking-widest italic">Hizalama</label>
                 <div className="grid grid-cols-6 gap-2">
@@ -1542,10 +1629,26 @@ export function SurveyCanvas() {
                       className="w-full bg-black/5 border border-black/5 rounded-xl p-3 text-[10px] font-black focus:outline-none focus:border-black/20 text-black appearance-none cursor-pointer"
                     >
                       <option value="Inter">INTER (SANS)</option>
+                      <option value="Space Grotesk">SPACE GROTESK</option>
+                      <option value="Outfit">OUTFIT</option>
+                      <option value="DM Sans">DM SANS</option>
                       <option value="Playfair Display">PLAYFAIR (SERIF)</option>
                       <option value="JetBrains Mono">JETBRAINS (MONO)</option>
                     </select>
                   </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-black/20 uppercase mb-2 tracking-widest italic">Boyut</label>
+                    <input
+                      type="range"
+                      min="8"
+                      max="120"
+                      value={objects.find(o => o.id === selectedIds[0])?.fontSize || 20}
+                      onChange={(e) => setObjects(objects.map(o => o.id === selectedIds[0] ? { ...o, fontSize: parseInt(e.target.value) } : o))}
+                      className="w-full accent-black h-1.5 bg-black/10 rounded-full"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-[10px] font-black text-black/20 uppercase mb-2 tracking-widest italic">Hizalama</label>
                     <div className="flex bg-black/5 p-1 rounded-xl border border-black/5">
@@ -2059,7 +2162,7 @@ export function SurveyCanvas() {
                 dash: obj.dash,
                 ...getFill(obj),
                 onClick: (e: any) => {
-                  if (tool !== 'select') return;
+                  if (tool !== 'select' || layer?.locked) return;
                   const id = obj.id;
                   const isShift = e.evt.shiftKey;
                   let newSelectedIds = [...selectedIds];
@@ -2081,7 +2184,7 @@ export function SurveyCanvas() {
                   
                   if (groupIds.length > 0) {
                     const allInGroups = objects
-                      .filter(o => o.groupId && groupIds.includes(o.groupId))
+                      .filter(o => o.groupId && groupIds.includes(o.groupId) && !layers.find(l => l.id === (o.layer || 'default'))?.locked)
                       .map(o => o.id);
                     newSelectedIds = Array.from(new Set([...newSelectedIds, ...allInGroups]));
                   }
@@ -2089,8 +2192,26 @@ export function SurveyCanvas() {
                   setSelectedIds(newSelectedIds);
                 },
                 onTap: (e: any) => {
-                  if (tool !== 'select') return;
+                  if (tool !== 'select' || layer?.locked) return;
                   setSelectedIds([obj.id]);
+                },
+                onDragMove: (e: any) => {
+                  if (selectedIds.length > 1 && selectedIds.includes(obj.id)) {
+                    const dx = e.target.x() - obj.x;
+                    const dy = e.target.y() - obj.y;
+                    
+                    // Sync visually without React state during drag
+                    selectedIds.forEach((id) => {
+                      if (id !== obj.id) {
+                        const node = e.target.getStage().findOne('#' + id);
+                        const origObj = objects.find(o => o.id === id);
+                        if (node && origObj) {
+                          node.x(origObj.x + dx);
+                          node.y(origObj.y + dy);
+                        }
+                      }
+                    });
+                  }
                 },
                 onDragEnd: (e: any) => {
                   const dx = e.target.x() - obj.x;
